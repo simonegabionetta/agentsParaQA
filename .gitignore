@@ -1,0 +1,26 @@
+# Ambientes virtuais
+.venv/
+venv/
+env/
+
+# Configuração local (contém chaves de API)
+.env
+robocopQA/.env
+ultron/.env
+
+# Relatórios gerados
+robocopQA/reports/
+robocopQA/screenshots/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# Node
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
