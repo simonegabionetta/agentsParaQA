@@ -3,10 +3,12 @@ Cliente de gerenciador de projetos para o Ultron.
 Suporta: Jira, Linear, GitHub Issues.
 """
 
+import json
 import os
 import requests
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass
@@ -175,6 +177,54 @@ class GitHubIssuesClient(PMClient):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Huly (via ponte de arquivos + MCP)
+# ──────────────────────────────────────────────────────────────────────────────
+
+class HulyClient(PMClient):
+    """
+    Provider para cards do Huly.
+
+    O Huly é acessado pelo MCP (não por HTTP), e o script Python não fala MCP.
+    Por isso este cliente funciona como uma PONTE DE ARQUIVOS, orquestrada pelo
+    agente `ultron-qa`:
+
+      1. O agente busca o card no Huly via MCP (`get_issue`) e grava título +
+         descrição num JSON local → caminho em HULY_CARD_FILE.
+      2. `get_card` lê esse JSON (o Ultron não acessa o Huly diretamente).
+      3. `post_comment` grava o comentário Markdown gerado num arquivo .md e
+         retorna o caminho.
+      4. O agente publica o conteúdo desse arquivo no card via MCP `add_comment`.
+    """
+
+    def __init__(self, card_file: str, comment_out: str = ""):
+        self._card_file = card_file
+        self._comment_out = comment_out
+
+    def get_card(self, card_id: str) -> CardData:
+        path = Path(self._card_file)
+        if not path.exists():
+            raise RuntimeError(
+                f"HULY_CARD_FILE não encontrado: {self._card_file}. "
+                "O agente ultron-qa deve buscar o card via MCP (get_issue) e "
+                "gravar o JSON com title/description antes de rodar o Ultron."
+            )
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return CardData(
+            id=card_id,
+            title=data.get("title", card_id),
+            description=data.get("description", ""),
+            url=data.get("url", ""),
+        )
+
+    def post_comment(self, card_id: str, body: str) -> str:
+        out = Path(self._comment_out) if self._comment_out else Path(f"qa-docs/{card_id}/ultron-comment.md")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(body, encoding="utf-8")
+        # Não posta direto: o agente ultron-qa publica este arquivo via MCP add_comment.
+        return str(out.resolve())
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Factory
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -196,7 +246,12 @@ def build_pm_client(env: dict) -> PMClient:
         repo  = _require(env, "GITHUB_REPO")
         return GitHubIssuesClient(token, repo)
 
-    raise ValueError(f"PM_PROVIDER '{provider}' não reconhecido. Use: jira | linear | github")
+    if provider == "huly":
+        card_file   = _require(env, "HULY_CARD_FILE")
+        comment_out = env.get("HULY_COMMENT_OUT", "").strip()
+        return HulyClient(card_file, comment_out)
+
+    raise ValueError(f"PM_PROVIDER '{provider}' não reconhecido. Use: jira | linear | github | huly")
 
 
 def _require(env: dict, key: str) -> str:
