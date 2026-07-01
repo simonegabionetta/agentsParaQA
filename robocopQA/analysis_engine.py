@@ -4,9 +4,15 @@ Recebe os dados coletados pelo crawler e gera casos de teste em Markdown estrutu
 Compatível com qualquer provedor via LiteLLM: Anthropic, OpenAI, Gemini, Groq, Ollama, etc.
 """
 
+import os
+import shutil
+import subprocess
 from pathlib import Path
 import litellm
 from crawler import PageData
+
+# Provedores que usam a subscription via CLI `claude -p` (sem API key)
+_CLI_PROVIDERS = {"claude-cli", "claude-code", "subscription"}
 
 litellm.suppress_debug_info = True
 
@@ -54,7 +60,11 @@ Perfil: TÉCNICO
 
 
 def _call_llm(system: str, prompt: str, model: str, api_key: str, max_tokens: int) -> str:
-    """Chama qualquer LLM via LiteLLM."""
+    """Chama o LLM. Usa a subscription via CLI `claude -p` ou qualquer provedor via LiteLLM."""
+    provider = os.getenv("LLM_PROVIDER", "anthropic").strip().lower()
+    if provider in _CLI_PROVIDERS:
+        return _call_claude_cli(system, prompt, model)
+
     kwargs = {
         "model": model,
         "max_tokens": max_tokens,
@@ -68,6 +78,51 @@ def _call_llm(system: str, prompt: str, model: str, api_key: str, max_tokens: in
 
     response = litellm.completion(**kwargs)
     return response.choices[0].message.content
+
+
+def _call_claude_cli(system: str, prompt: str, model: str) -> str:
+    """Gera texto pela subscription usando o Claude Code em modo headless (`claude -p`).
+
+    O system prompt é concatenado ao prompt e enviado via stdin — evita limite de
+    tamanho e problemas de escape de argumentos no Windows.
+    """
+    # No Windows o npm cria claude.cmd; subprocess precisa do nome explícito.
+    if os.name == "nt":
+        claude_bin = shutil.which("claude.cmd") or shutil.which("claude") or "claude.cmd"
+    else:
+        claude_bin = shutil.which("claude") or "claude"
+
+    cmd = [claude_bin, "-p", "--output-format", "text"]
+    if model and model not in _CLI_PROVIDERS:
+        cmd += ["--model", model]
+
+    full_input = f"{system}\n\n---\n\n{prompt}" if system else prompt
+
+    try:
+        result = subprocess.run(
+            cmd,
+            input=full_input,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+    except FileNotFoundError:
+        raise RuntimeError(
+            "CLI `claude` não encontrado no PATH. Instale o Claude Code e faça login "
+            "(`claude` → /login) antes de usar LLM_PROVIDER=claude-cli."
+        )
+
+    if result.returncode != 0:
+        detalhe = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(
+            f"`claude -p` falhou (código {result.returncode}): {detalhe or 'sem saída'}. "
+            "Verifique se você está logado na subscription (`claude` → /login)."
+        )
+
+    out = (result.stdout or "").strip()
+    if not out:
+        raise RuntimeError("`claude -p` retornou vazio. Verifique login e cota da subscription.")
+    return out
 
 
 def analyze_pages(
