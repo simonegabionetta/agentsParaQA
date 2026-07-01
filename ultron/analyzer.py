@@ -58,37 +58,21 @@ _TEMPLATE = """
 
 ## Tarefa
 
-Analise o card e o diff acima e produza EXATAMENTE no formato abaixo, sem adicionar seções extras:
+Analise o card e o diff acima e produza APENAS a tabela de casos de teste abaixo.
+NÃO escreva nenhum texto antes ou depois da tabela — sem título, sem resumo, sem
+checklist, sem pontos de atenção, sem comentários. A resposta deve ser somente a tabela.
 
----
+Regras da tabela de casos:
+- **ID**: use o ID do card como prefixo, numerando sequencialmente — `{card_id}-CT01`, `{card_id}-CT02`, ...
+- **Título**: frase curta começando por verbo de ação (ex.: "Importar contatos sem campanha").
+- **Comportamento Esperado**: o resultado objetivo esperado (ex.: "Retorna 200 e cria os contatos").
+- **Critério**: o critério de aceite do card que o caso cobre (ex.: `CA-01`). Se o caso não mapear nenhum critério explícito, use `—`.
+- **Automatizar**: `Sim` quando for bom candidato a automação (fluxo determinístico) ou `Não` quando depender de inspeção manual/visual.
 
-### Resumo das Alterações
-[2-4 frases descrevendo o que foi modificado tecnicamente e qual impacto funcional isso tem para o usuário]
-
----
-
-### Casos de Teste Sugeridos
-
-| # | Cenário | Pré-condição | Passos | Resultado Esperado | Prioridade |
-|---|---------|-------------|--------|--------------------|-----------|
-| CT-01 | [nome claro] | [estado necessário] | [passos numerados] | [comportamento esperado] | Alta/Média/Baixa |
+| ID | Título | Comportamento Esperado | Critério | Automatizar |
+|----|--------|------------------------|----------|-------------|
+| {card_id}-CT01 | [verbo + alvo do caso] | [resultado objetivo esperado] | [CA-NN ou —] | Sim/Não |
 [Continue com quantos casos forem necessários — mínimo 3, máximo 15]
-
----
-
-### Checklist de Validação
-
-- [ ] [item de validação obrigatório]
-[Continue com todos os itens relevantes]
-
----
-
-### Pontos de Atenção
-
-- [risco ou detalhe técnico concreto baseado no diff]
-[Continue com outros pontos se houver]
-
----
 """
 
 
@@ -165,15 +149,7 @@ def _trim_diff(diff: str, max_chars: int = 18_000) -> str:
 
 
 def _wrap_comment(card: CardData, prs: list[PRData], analysis: str, perfil: str) -> str:
-    pr_refs = ", ".join(f"#{pr.number}" for pr in prs)
-    header = (
-        f"## Ultron QA — Análise automática\n\n"
-        f"> Card **{card.id}** · PR(s): {pr_refs} · Perfil: {perfil.upper()}\n\n"
-        f"---\n\n"
-    )
-    footer = (
-        "\n\n---\n"
-        "_Gerado automaticamente pelo Ultron QA. "
-        "Revise os casos antes de executar._"
-    )
-    return header + analysis + footer
+    # O comentário contém SOMENTE a tabela de casos de teste — sem cabeçalho,
+    # resumo ou rodapé. A autoria do Ultron é sinalizada pela label "Ultron"
+    # adicionada ao card pelo agente ultron-qa.
+    return analysis.strip()

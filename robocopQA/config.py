@@ -11,11 +11,12 @@ class ConfigError(Exception):
 
 # Modelos padrão por provedor
 _DEFAULT_MODELS = {
-    "anthropic": "claude-opus-4-5",
-    "openai":    "gpt-4o",
-    "gemini":    "gemini/gemini-1.5-pro",
-    "groq":      "groq/llama-3.1-70b-versatile",
-    "ollama":    "ollama/llama3",
+    "claude-cli": "opus",   # usa a subscription via CLI `claude -p` (sem API key)
+    "anthropic":  "claude-opus-4-5",
+    "openai":     "gpt-4o",
+    "gemini":     "gemini/gemini-1.5-pro",
+    "groq":       "groq/llama-3.1-70b-versatile",
+    "ollama":     "ollama/llama3",
 }
 
 
@@ -43,11 +44,12 @@ def load_config() -> Config:
     screenshot = os.getenv("CAPTURE_SCREENSHOTS", "true").lower() != "false"
 
     _KEY_MAP = {
-        "anthropic": "ANTHROPIC_API_KEY",
-        "openai":    "OPENAI_API_KEY",
-        "gemini":    "GEMINI_API_KEY",
-        "groq":      "GROQ_API_KEY",
-        "ollama":    "",
+        "claude-cli": "",   # subscription via CLI, sem chave
+        "anthropic":  "ANTHROPIC_API_KEY",
+        "openai":     "OPENAI_API_KEY",
+        "gemini":     "GEMINI_API_KEY",
+        "groq":       "GROQ_API_KEY",
+        "ollama":     "",
     }
     env_var = _KEY_MAP.get(provider, "LLM_API_KEY")
     api_key = (os.getenv(env_var, "") or os.getenv("LLM_API_KEY", "")).strip()
