@@ -18,8 +18,11 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from config import load_config
 from github_client import GitHubClient
+from local_git_client import LocalGitClient
 from pm_client import build_pm_client
 from analyzer import build_comment
+from test_runner import execute, resolve_area
+from report_reader import read_report, all_passed
 
 
 def main():
@@ -53,10 +56,26 @@ Exemplos:
                      help="Perfil dos casos de teste (padrão: MANUAL)")
     cmd.add_argument("--dry-run", action="store_true", help="Exibe o comentário sem postar")
 
+    cmd.add_argument("--area", choices=["auto", "frontend", "backend"], default="auto",
+                     help="Area do card; auto usa o texto do card")
+    cmd.add_argument("--execute", action="store_true",
+                     help="Executa a suite configurada para a area apos gerar os casos")
+    cmd.add_argument("--repo", choices=["frontend", "bi", "agents", "backend"], default="",
+                     help="Repositorio local a analisar; obrigatorio para Backend")
+
+    cmd_pub = sub.add_parser("publicar", help="Publica a tabela de veredito no card, se a bateria fechou 100% PASSOU")
+    cmd_pub.add_argument("--card", required=True, help="ID do card (ex: ATD-142)")
+    cmd_pub.add_argument("--relatorio", default="", help="Caminho do RELATORIO.md (padrão: C:/Users/Simone/qa/<CARD>/RELATORIO.md)")
+    cmd_pub.add_argument("--dry-run", action="store_true", help="Mostra o que seria postado sem publicar")
+
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
         sys.exit(0)
+
+    if args.command == "publicar":
+        relatorio_path = Path(args.relatorio) if args.relatorio else Path(f"C:/Users/Simone/qa/{args.card}/RELATORIO.md")
+        sys.exit(run_publicar(args.card, relatorio_path, args.dry_run))
 
     # ── Resolve lista de PRs ─────────────────────────────────────────────────
     pr_numbers: list[int] = []
@@ -74,7 +93,7 @@ Exemplos:
 
     github_token = env.get("GITHUB_TOKEN", "").strip()
     github_repo  = env.get("GITHUB_REPO", "").strip()
-    if not github_token or not github_repo:
+    if False and (not github_token or not github_repo):
         print("ERRO: GITHUB_TOKEN e GITHUB_REPO são obrigatórios no .env")
         sys.exit(1)
 
@@ -89,14 +108,30 @@ Exemplos:
         _error(f"Erro ao buscar card: {e}")
         sys.exit(1)
     _ok(f"Card: {card.title}")
+    area = resolve_area(card, args.area)
+    if area == "unknown":
+        _error("Nao foi possivel identificar Frontend ou Backend. Use --area frontend ou --area backend.")
+        sys.exit(1)
+    _ok(f"Fluxo QA: {area}")
 
     # ── Busca PRs ────────────────────────────────────────────────────────────
-    gh = GitHubClient(github_token, github_repo)
+    repos = {
+        "frontend": r"C:\Users\Simone\Atendas\atendas-frontend",
+        "bi": r"C:\Users\Simone\Atendas\atendas-bi",
+        "agents": r"C:\Users\Simone\Atendas\atendas-agents",
+        "backend": r"C:\Users\Simone\Atendas\atendas-backend",
+    }
+    repo_key = args.repo or ("frontend" if area == "frontend" else "")
+    if not repo_key:
+        _error("Para um card Backend informe: --repo bi, --repo agents ou --repo backend.")
+        sys.exit(1)
+    source = LocalGitClient(repos[repo_key])
+    _ok(f"Fonte do diff: repositorio local {repos[repo_key]}")
     prs = []
     for pr_num in pr_numbers:
         _step(f"Buscando PR #{pr_num}...")
         try:
-            pr = gh.get_pr(pr_num, base_branch=args.base)
+            pr = source.get_pr(pr_num, base_branch=args.base)
             prs.append(pr)
             files_count = len(pr.files_changed)
             _ok(f"PR #{pr_num}: {pr.title} ({files_count} arquivo(s) alterado(s))")
@@ -118,6 +153,15 @@ Exemplos:
         _error(f"Erro na análise LLM: {e}")
         sys.exit(1)
     _ok("Análise concluída")
+
+    if args.execute:
+        _step(f"Executando testes de {area}...")
+        try:
+            run = execute(area, repo_key)
+        except Exception as e:
+            _error(f"Erro ao executar testes: {e}")
+            sys.exit(1)
+        _ok(f"Execucao: {run.status}")
 
     # ── Dry-run ou posta ─────────────────────────────────────────────────────
     if args.dry_run:
@@ -159,6 +203,43 @@ def _ok(msg: str):
 
 def _error(msg: str):
     print(f"\nERRO: {msg}\n")
+
+
+def run_publicar(card: str, relatorio_path: Path, dry_run: bool) -> int:
+    if not relatorio_path.exists():
+        print(f"ERRO: relatório não encontrado em {relatorio_path}")
+        return 1
+
+    texto = relatorio_path.read_text(encoding="utf-8")
+    report = read_report(texto)
+
+    if not report.cases:
+        print(f"ERRO: nenhum caso com veredito encontrado em {relatorio_path}")
+        return 1
+
+    if not all_passed(report.cases):
+        print(f"\nBateria não fechou 100% PASSOU — nada foi postado no card {card}.\n")
+        for caso in report.cases:
+            if caso.veredito != "PASSOU":
+                print(f"  {caso.id}: {caso.veredito} (critério: {caso.criterio or '—'})")
+        return 1
+
+    print(f"\nTodos os {len(report.cases)} casos passaram. Tabela que seria postada em {card}:\n")
+    print(report.table_markdown)
+
+    if dry_run:
+        print("\n[DRY-RUN] Nada foi postado.")
+        return 0
+
+    resposta = input("\nConfirma publicar esta tabela como comentário no card? (sim/não): ")
+    if resposta.strip().lower() not in ("sim", "s"):
+        print("Cancelado. Nada foi postado.")
+        return 1
+
+    pm = build_pm_client(dict(os.environ))
+    url = pm.post_comment(card, report.table_markdown)
+    print(f"Comentário postado: {url}")
+    return 0
 
 
 if __name__ == "__main__":
